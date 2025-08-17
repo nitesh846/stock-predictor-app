@@ -1,8 +1,8 @@
 # app.py
 
 import matplotlib
-# --- THE FIX: Set the backend BEFORE importing pyplot ---
-# This tells matplotlib to not use any GUI windows, which is essential for web servers.
+# FIX for Server Environments: Set the backend BEFORE importing pyplot
+# This tells matplotlib to not use any GUI windows, which is essential.
 matplotlib.use('Agg')
 
 import yfinance as yf
@@ -13,7 +13,7 @@ from sklearn.preprocessing import MinMaxScaler
 from tensorflow.keras.models import Sequential
 from tensorflow.keras.layers import LSTM, Dense, Dropout
 from datetime import date, timedelta, datetime
-import matplotlib.pyplot as plt # Now this import is safe
+import matplotlib.pyplot as plt
 import warnings
 import os
 from newsapi import NewsApiClient
@@ -38,8 +38,9 @@ app = Flask(__name__)
 if not os.path.exists('static/images'):
     os.makedirs('static/images')
 
-# --- 2. Settings (Unchanged) ---
-NEWS_API_KEY = os.getenv('NEWS_API_KEY', '993551ddb5b64cdbbdc0df8ce97c9bda')
+# --- 2. Settings ---
+# SECURE: Reads the API key from a server environment variable
+NEWS_API_KEY = os.getenv('NEWS_API_KEY', 'YOUR_DEFAULT_KEY_HERE_IF_NEEDED')
 TIME_STEPS = 60
 PREDICTION_DAYS = 5
 HISTORICAL_DAYS_TO_PLOT = 200
@@ -48,7 +49,8 @@ DIVERGENCE_LOOKBACK = 30
 newsapi = NewsApiClient(api_key=NEWS_API_KEY)
 
 
-# --- 3. All Helper Functions (Unchanged) ---
+# --- 3. All Helper and Processing Functions ---
+
 def calculate_pivot_points(data):
     last_day = data.iloc[-1]
     high, low, close = last_day['High'], last_day['Low'], last_day['Close']
@@ -72,7 +74,7 @@ def detect_reversal_signal(data, lookback_period):
     return "None"
 
 def get_sentiment_analysis(ticker):
-    if not NEWS_API_KEY: return "Neutral"
+    if not NEWS_API_KEY or NEWS_API_KEY == 'YOUR_DEFAULT_KEY_HERE_IF_NEEDED': return "Neutral"
     try:
         query = ticker.replace('.NS', '')
         all_articles = newsapi.get_everything(q=query, from_param=(datetime.now() - timedelta(days=7)).strftime('%Y-%m-%d'), to=datetime.now().strftime('%Y-%m-%d'), language='en', sort_by='relevancy', page_size=20)
@@ -87,9 +89,9 @@ def get_sentiment_analysis(ticker):
     except:
         return "Neutral"
 
-# --- 4. The Core Processing Function (Unchanged) ---
 def process_stock_data(ticker):
     try:
+        # (The core logic of this function is identical to the last working version)
         data = yf.download(ticker, start='2015-01-01', end=date.today().strftime('%Y-%m-%d'), progress=False)
         if data.empty: return {"error": f"No data found for {ticker}."}
         if isinstance(data.columns, pd.MultiIndex): data.columns = data.columns.get_level_values(0)
@@ -109,12 +111,15 @@ def process_stock_data(ticker):
         for i in range(TIME_STEPS, len(scaled_features)):
             X_train.append(scaled_features[i-TIME_STEPS:i, :]); y_train.append(scaled_features[i, [high_col_idx, low_col_idx, close_col_idx]])
         X_train, y_train = np.array(X_train), np.array(y_train)
+        
+        # Note: 'tensorflow' is imported as keras, and it works with the tensorflow-cpu package
         model = Sequential([
             LSTM(units=100, return_sequences=True, input_shape=(X_train.shape[1], X_train.shape[2])), Dropout(0.2),
             LSTM(units=100, return_sequences=False), Dropout(0.2), Dense(units=50), Dense(units=3)
         ])
         model.compile(optimizer='adam', loss='mean_squared_error')
         model.fit(X_train, y_train, batch_size=32, epochs=30, verbose=0)
+        
         last_sequence = scaled_features[-TIME_STEPS:]
         prediction_input = np.reshape(last_sequence, (1, TIME_STEPS, X_train.shape[2]))
         predicted_scaled_values = []
@@ -123,6 +128,7 @@ def process_stock_data(ticker):
             predicted_scaled_values.append(prediction_scaled)
             new_row = prediction_input[0, -1, :].copy(); new_row[high_col_idx], new_row[low_col_idx], new_row[close_col_idx] = prediction_scaled[0], prediction_scaled[1], prediction_scaled[2]
             prediction_input = np.reshape(np.vstack([prediction_input[0, 1:, :], new_row]), (1, TIME_STEPS, X_train.shape[2]))
+        
         predicted_scaled_values = np.array(predicted_scaled_values)
         dummy_array = np.zeros((len(predicted_scaled_values), len(feature_columns))); dummy_array[:, [high_col_idx, low_col_idx, close_col_idx]] = predicted_scaled_values
         inversed_predictions = scaler.inverse_transform(dummy_array)
@@ -146,9 +152,7 @@ def process_stock_data(ticker):
         else: recommendation = "Hold"
         
         prediction_dates = [d.strftime('%Y-%m-%d') for d in pd.bdate_range(start=pd.to_datetime(data['Date'].iloc[-1]) + timedelta(days=1), periods=PREDICTION_DAYS)]
-        prediction_df = pd.DataFrame({
-            'Date': prediction_dates, 'High': [f'{p:.2f}' for p in predicted_highs], 'Low': [f'{p:.2f}' for p in predicted_lows], 'Close': [f'{p:.2f}' for p in predicted_closes]
-        })
+        prediction_df = pd.DataFrame({'Date': prediction_dates, 'High': [f'{p:.2f}' for p in predicted_highs], 'Low': [f'{p:.2f}' for p in predicted_lows], 'Close': [f'{p:.2f}' for p in predicted_closes]})
 
         plot_path = f'static/images/{ticker}_plot.png'
         plt.style.use('seaborn-v0_8-darkgrid'); plt.figure(figsize=(10, 6))
@@ -167,9 +171,11 @@ def process_stock_data(ticker):
             "plot_url": f'/{plot_path}?t={time.time()}'
         }
     except Exception as e:
-        return {"error": f"An unexpected error occurred: {str(e)}"}
+        # Log the full error to the server log for debugging
+        print(f"Error processing {ticker}: {e}", file=sys.stderr)
+        return {"error": f"An unexpected error occurred. Check server logs for details."}
 
-# --- 5. Flask API Routes (Unchanged) ---
+# --- 4. Flask API Routes ---
 @app.route('/')
 def index():
     return render_template('index.html')
@@ -179,10 +185,10 @@ def predict():
     ticker = request.json.get('ticker')
     if not ticker:
         return jsonify({"error": "Ticker symbol is required."}), 400
-    
     results = process_stock_data(ticker.upper())
     return jsonify(results)
 
-# --- 6. Run the App (Unchanged) ---
+# --- 5. Run the App ---
+# This part is used for local testing. The production server (Gunicorn) will run the app differently.
 if __name__ == '__main__':
-    app.run(debug=True)
+    app.run(debug=False)
