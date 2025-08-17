@@ -1,0 +1,138 @@
+<!-- templates/index.html -->
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Stock Trend Predictor</title>
+    <style>
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif; background-color: #f4f7f9; color: #333; line-height: 1.6; margin: 0; padding: 20px; }
+        .container { max-width: 900px; margin: 20px auto; padding: 20px; background: #fff; border-radius: 8px; box-shadow: 0 4px 15px rgba(0,0,0,0.1); }
+        h1, h2 { text-align: center; color: #2c3e50; }
+        .input-form { display: flex; justify-content: center; gap: 10px; margin-bottom: 30px; }
+        #ticker-input { padding: 10px; font-size: 16px; border: 1px solid #ccc; border-radius: 4px; width: 300px; }
+        #predict-btn { padding: 10px 20px; font-size: 16px; background-color: #3498db; color: white; border: none; border-radius: 4px; cursor: pointer; transition: background-color 0.3s; }
+        #predict-btn:hover { background-color: #2980b9; }
+        #loader { display: none; text-align: center; margin: 20px; }
+        .results-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin-top: 20px; align-items: start; }
+        .card { padding: 15px; background: #f9f9f9; border-radius: 5px; border: 1px solid #eee; }
+        .card h3 { margin-top: 0; }
+        table { width: 100%; border-collapse: collapse; }
+        th, td { padding: 8px; text-align: left; border-bottom: 1px solid #ddd; }
+        #plot-container img { max-width: 100%; border-radius: 5px; }
+        .summary-item { display: flex; justify-content: space-between; padding: 5px 0; border-bottom: 1px solid #eee; }
+        .summary-item span:first-child { font-weight: bold; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Stock Trend Predictor</h1>
+        <div class="input-form">
+            <input type="text" id="ticker-input" placeholder="Enter NSE Ticker (e.g., RELIANCE.NS)">
+            <button id="predict-btn">Predict</button>
+        </div>
+        
+        <div id="loader">
+            <p><strong>Processing...</strong> This may take a moment as the model is training.</p>
+        </div>
+
+        <div id="results" style="display:none;">
+            <h2 id="results-ticker"></h2>
+            <div class="results-grid">
+                <div class="card">
+                    <h3>Summary</h3>
+                    <div id="summary-container"></div>
+                </div>
+                <div class="card">
+                    <h3>Key Swing Levels (Pivots)</h3>
+                    <div id="pivots-container"></div>
+                </div>
+            </div>
+            
+            <div class="card" style="margin-top: 20px;">
+                <h3>5-Day Price Forecast</h3>
+                <table id="prediction-table">
+                    <thead><tr><th>Date</th><th>High</th><th>Low</th><th>Close</th></tr></thead>
+                    <tbody></tbody>
+                </table>
+            </div>
+
+            <div class="card" style="margin-top: 20px;">
+                <h3>Trend Visualization</h3>
+                <div id="plot-container">
+                    <img id="plot-img" src="" alt="Prediction Plot">
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        document.getElementById('predict-btn').addEventListener('click', async () => {
+            const ticker = document.getElementById('ticker-input').value.trim();
+            if (!ticker) {
+                alert('Please enter a stock ticker.');
+                return;
+            }
+
+            // Show loader and hide old results
+            document.getElementById('loader').style.display = 'block';
+            document.getElementById('results').style.display = 'none';
+
+            try {
+                const response = await fetch('/predict', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ ticker: ticker })
+                });
+
+                const data = await response.json();
+
+                // Hide loader
+                document.getElementById('loader').style.display = 'none';
+
+                if (data.error) {
+                    alert('Error: ' + data.error);
+                    return;
+                }
+
+                // Populate results
+                document.getElementById('results-ticker').innerText = `${data.ticker} Analysis`;
+
+                // Summary
+                const summaryContainer = document.getElementById('summary-container');
+                summaryContainer.innerHTML = '';
+                for (const [key, value] of Object.entries(data.summary)) {
+                    summaryContainer.innerHTML += `<div class="summary-item"><span>${key}</span><span>${value}</span></div>`;
+                }
+                
+                // Pivots
+                const pivotsContainer = document.getElementById('pivots-container');
+                pivotsContainer.innerHTML = '';
+                 for (const [key, value] of Object.entries(data.pivot_points)) {
+                    pivotsContainer.innerHTML += `<div class="summary-item"><span>${key}</span><span>${value}</span></div>`;
+                }
+
+                // Prediction Table
+                const tableBody = document.querySelector('#prediction-table tbody');
+                tableBody.innerHTML = ''; // Clear old rows
+                data.prediction_table.forEach(row => {
+                    const tr = document.createElement('tr');
+                    tr.innerHTML = `<td>${row.Date}</td><td>${row.High}</td><td>${row.Low}</td><td>${row.Close}</td>`;
+                    tableBody.appendChild(tr);
+                });
+
+                // Plot
+                document.getElementById('plot-img').src = data.plot_url;
+
+                // Show results container
+                document.getElementById('results').style.display = 'block';
+
+            } catch (error) {
+                document.getElementById('loader').style.display = 'none';
+                alert('An error occurred while fetching the prediction.');
+                console.error('Error:', error);
+            }
+        });
+    </script>
+</body>
+</html>

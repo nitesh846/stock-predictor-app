@@ -1,0 +1,46 @@
+Last login: Sun Aug 17 15:39:20 on console
+(base) niteshmacbook@Niteshs-MacBook-Pro ~ % pip install gunicorn
+Collecting gunicorn
+  Downloading gunicorn-23.0.0-py3-none-any.whl.metadata (4.4 kB)
+Requirement already satisfied: packaging in /opt/miniconda3/lib/python3.12/site-packages (from gunicorn) (24.1)
+Downloading gunicorn-23.0.0-py3-none-any.whl (85 kB)
+Installing collected packages: gunicorn
+Successfully installed gunicorn-23.0.0
+(base) niteshmacbook@Niteshs-MacBook-Pro ~ % cd downloads         
+(base) niteshmacbook@Niteshs-MacBook-Pro downloads % cd
+(base) niteshmacbook@Niteshs-MacBook-Pro ~ % cd documents stock_predictor_app
+cd: string not in pwd: documents
+(base) niteshmacbook@Niteshs-MacBook-Pro ~ % cd documents
+(base) niteshmacbook@Niteshs-MacBook-Pro documents % cd stock_predictor_app
+(base) niteshmacbook@Niteshs-MacBook-Pro stock_predictor_app % pip freeze > requirements.txt
+(base) niteshmacbook@Niteshs-MacBook-Pro stock_predictor_app % touch .gitignore
+
+(base) niteshmacbook@Niteshs-MacBook-Pro stock_predictor_app % nano .gitignore
+
+
+
+
+  UW PICO 5.09                    File: .gitignore                    Modified  
+
+__pycache__/
+*.pyc
+.env
+.venv
+static/images/*
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+^G Get Help  ^O WriteOut  ^R Read File ^Y Prev Pg   ^K Cut Text  ^C Cur Pos   
+^X Exit      ^J Justify   ^W Where is  ^V Next Pg   ^U UnCut Text^T To Spell  
