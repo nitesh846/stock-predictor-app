@@ -3,7 +3,7 @@ gunicorn
 yfinance
 pandas
 pandas-ta
-tensorflow
+tensorflow-cpu   # <--- THIS IS THE CRUCIAL CHANGE
 scikit-learn
 matplotlib
 newsapi-python
