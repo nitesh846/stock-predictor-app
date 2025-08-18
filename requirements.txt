@@ -3,7 +3,7 @@ gunicorn
 yfinance
 pandas
 pandas-ta
-tensorflow-cpu   # <-- The key change for a CPU-only server
+tensorflow-cpu
 scikit-learn
 matplotlib
 newsapi-python
