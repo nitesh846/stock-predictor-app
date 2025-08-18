@@ -4,7 +4,7 @@ yfinance==0.2.37
 pandas==2.2.2
 pandas-ta==0.3.14b0  #<-- This specific version is known to work with modern numpy
 numpy==1.26.4        #<-- Pinning numpy to be sure
-tensorflow-cpu==2.16.1
+tensorflow-cpu==2.20.0
 scikit-learn==1.4.2
 matplotlib==3.8.4
 newsapi-python==0.2.7
