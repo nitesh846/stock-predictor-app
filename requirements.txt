@@ -1,12 +1,12 @@
-Flask==3.0.0
-gunicorn==22.0.0
-yfinance==0.2.37
-pandas==2.2.3        # <-- UPDATED from 2.2.2 to 2.2.3
-pandas-ta==0.3.14b0
-numpy                # <-- REMOVED the version number completely
-tensorflow-cpu==2.20.0
-scikit-learn==1.4.2
-matplotlib==3.8.4
-newsapi-python==0.2.7
-nltk==3.8.1
-openpyxl==3.1.2
+Flask
+gunicorn
+yfinance
+pandas
+pandas-ta==0.3.14b0   #<-- Keep this specific version, it's important
+numpy
+tensorflow-cpu
+scikit-learn
+matplotlib
+newsapi-python
+nltk
+openpyxl
