@@ -16,6 +16,7 @@ from datetime import date, timedelta, datetime
 import matplotlib.pyplot as plt
 import warnings
 import os
+import sys  # Added for logging
 from newsapi import NewsApiClient
 import nltk
 from flask import Flask, request, jsonify, render_template
@@ -50,6 +51,51 @@ newsapi = NewsApiClient(api_key=NEWS_API_KEY)
 
 
 # --- 3. All Helper and Processing Functions ---
+
+def get_fundamental_analysis(ticker):
+    """
+    Analyzes the fundamental strength of a stock based on key financial metrics.
+    """
+    try:
+        stock = yf.Ticker(ticker)
+        info = stock.info
+
+        score = 0
+        details = {}
+
+        # 1. P/E Ratio (lower is generally better, but not negative)
+        pe_ratio = info.get('trailingPE')
+        details['P/E Ratio'] = f"{pe_ratio:.2f}" if pe_ratio else "N/A"
+        if pe_ratio and 0 < pe_ratio < 25:
+            score += 1
+
+        # 2. Debt-to-Equity Ratio (lower is better, < 100% or 1.0 is ideal)
+        debt_to_equity = info.get('debtToEquity')
+        details['Debt/Equity'] = f"{(debt_to_equity / 100):.2f}" if debt_to_equity else "N/A"
+        if debt_to_equity is not None and debt_to_equity < 100:
+            score += 1
+
+        # 3. Return on Equity (ROE) (higher is better, > 15% is strong)
+        roe = info.get('returnOnEquity')
+        details['Return on Equity'] = f"{roe*100:.2f}%" if roe else "N/A"
+        if roe and roe > 0.15:
+            score += 1
+        
+        # 4. Profit Margin (higher is better, > 10% is good)
+        profit_margin = info.get('profitMargins')
+        details['Profit Margin'] = f"{profit_margin*100:.2f}%" if profit_margin else "N/A"
+        if profit_margin and profit_margin > 0.10:
+            score += 1
+
+        # Determine category based on score
+        if score >= 3: category = "Strong"
+        elif score == 2: category = "Moderate"
+        else: category = "Weak"
+        
+        return {"category": category, "details": details}
+
+    except Exception:
+        return {"category": "N/A", "details": {"Error": "Could not fetch fundamental data."}}
 
 def calculate_pivot_points(data):
     last_day = data.iloc[-1]
@@ -91,10 +137,13 @@ def get_sentiment_analysis(ticker):
 
 def process_stock_data(ticker):
     try:
-        # (The core logic of this function is identical to the last working version)
         data = yf.download(ticker, start='2015-01-01', end=date.today().strftime('%Y-%m-%d'), progress=False)
         if data.empty: return {"error": f"No data found for {ticker}."}
         if isinstance(data.columns, pd.MultiIndex): data.columns = data.columns.get_level_values(0)
+
+        # --- NEW: Get Fundamental Analysis ---
+        fundamental_analysis = get_fundamental_analysis(ticker)
+        fundamental_strength = fundamental_analysis['category']
 
         pivot_levels = calculate_pivot_points(data)
         data.ta.rsi(append=True); data.ta.macd(append=True); data.ta.bbands(length=20, std=2.0, append=True)
@@ -112,7 +161,6 @@ def process_stock_data(ticker):
             X_train.append(scaled_features[i-TIME_STEPS:i, :]); y_train.append(scaled_features[i, [high_col_idx, low_col_idx, close_col_idx]])
         X_train, y_train = np.array(X_train), np.array(y_train)
         
-        # Note: 'tensorflow' is imported as keras, and it works with the tensorflow-cpu package
         model = Sequential([
             LSTM(units=100, return_sequences=True, input_shape=(X_train.shape[1], X_train.shape[2])), Dropout(0.2),
             LSTM(units=100, return_sequences=False), Dropout(0.2), Dense(units=50), Dense(units=3)
@@ -143,13 +191,22 @@ def process_stock_data(ticker):
         
         sentiment_category = get_sentiment_analysis(ticker)
 
+        # --- UPDATED: Multi-factor Recommendation Logic ---
+        recommendation = "Hold" # Default
         if reversal_signal == "Bearish Divergence": recommendation = "Hold (Bearish Divergence)"
         elif reversal_signal == "Bullish Divergence": recommendation = "Hold (Bullish Divergence)"
-        elif trend == "Upward" and sentiment_category == "Positive": recommendation = "Strong Buy"
-        elif trend == "Upward": recommendation = "Buy"
-        elif trend == "Downward" and sentiment_category == "Negative": recommendation = "Strong Sell"
-        elif trend == "Downward": recommendation = "Sell"
-        else: recommendation = "Hold"
+        else:
+            if trend == "Upward":
+                if fundamental_strength == "Strong" and sentiment_category == "Positive": recommendation = "Strong Buy"
+                elif fundamental_strength in ["Strong", "Moderate"]: recommendation = "Buy"
+                else: recommendation = "Hold (Weak Fundamentals)" # Cautious on weak fundamentals
+            elif trend == "Downward":
+                if fundamental_strength == "Weak" and sentiment_category == "Negative": recommendation = "Strong Sell"
+                elif fundamental_strength == "Weak": recommendation = "Sell"
+                else: recommendation = "Hold (Monitor for Dip)" # Strong company, might be a buying opportunity
+            else: # Sideways trend
+                if fundamental_strength == "Strong": recommendation = "Hold / Accumulate"
+                else: recommendation = "Hold"
         
         prediction_dates = [d.strftime('%Y-%m-%d') for d in pd.bdate_range(start=pd.to_datetime(data['Date'].iloc[-1]) + timedelta(days=1), periods=PREDICTION_DAYS)]
         prediction_df = pd.DataFrame({'Date': prediction_dates, 'High': [f'{p:.2f}' for p in predicted_highs], 'Low': [f'{p:.2f}' for p in predicted_lows], 'Close': [f'{p:.2f}' for p in predicted_closes]})
@@ -160,18 +217,27 @@ def process_stock_data(ticker):
         plt.plot(historical_plot_data['Date'], historical_plot_data['Close'], label='Historical Close', color='royalblue')
         plt.plot(pd.to_datetime(prediction_df['Date']), predicted_closes, label='Predicted Close', linestyle='--', color='orangered', marker='o')
         plt.fill_between(pd.to_datetime(prediction_df['Date']), predicted_highs, predicted_lows, color='orangered', alpha=0.2, label='Predicted High-Low Range')
-        title_text = f'{ticker} Prediction\nTrend: {trend} | Sentiment: {sentiment_category} | Reversal: {reversal_signal}\nRecommendation: {recommendation}'
+        # --- UPDATED: Plot Title ---
+        title_text = f'{ticker} Prediction\nTrend: {trend} | Sentiment: {sentiment_category} | Fundamentals: {fundamental_strength}\nRecommendation: {recommendation}'
         plt.title(title_text, fontsize=14); plt.xlabel('Date'); plt.ylabel('Price (INR)')
         plt.legend(); plt.xticks(rotation=45); plt.tight_layout(); plt.savefig(plot_path); plt.close()
 
+        # --- UPDATED: JSON Response ---
         return {
-            "ticker": ticker, "prediction_table": prediction_df.to_dict(orient='records'),
-            "summary": {"Trend": trend, "Sentiment": sentiment_category, "Reversal Signal": reversal_signal, "Recommendation": recommendation},
+            "ticker": ticker, 
+            "prediction_table": prediction_df.to_dict(orient='records'),
+            "summary": {
+                "Trend": trend, 
+                "Sentiment": sentiment_category, 
+                "Fundamental Strength": fundamental_strength,
+                "Reversal Signal": reversal_signal, 
+                "Recommendation": recommendation
+            },
+            "fundamental_details": fundamental_analysis['details'],
             "pivot_points": {k: f'{v:.2f}' for k, v in pivot_levels.items()},
             "plot_url": f'/{plot_path}?t={time.time()}'
         }
     except Exception as e:
-        # Log the full error to the server log for debugging
         print(f"Error processing {ticker}: {e}", file=sys.stderr)
         return {"error": f"An unexpected error occurred. Check server logs for details."}
 
@@ -189,6 +255,5 @@ def predict():
     return jsonify(results)
 
 # --- 5. Run the App ---
-# This part is used for local testing. The production server (Gunicorn) will run the app differently.
 if __name__ == '__main__':
     app.run(debug=False)
