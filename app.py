@@ -1,4 +1,4 @@
-# app.py - LIGHTWEIGHT PREDICTION SERVER
+# app.py - FINAL SCALABLE VERSION (Train on Demand)
 
 import matplotlib
 matplotlib.use('Agg')
@@ -6,7 +6,9 @@ matplotlib.use('Agg')
 import yfinance as yf
 import numpy as np
 import pandas as pd
-from tensorflow.keras.models import load_model
+from sklearn.preprocessing import MinMaxScaler
+from tensorflow.keras.models import Sequential, load_model
+from tensorflow.keras.layers import LSTM, Dense, Dropout
 from datetime import date, timedelta, datetime
 import matplotlib.pyplot as plt
 import warnings
@@ -25,7 +27,9 @@ from nltk.sentiment.vader import SentimentIntensityAnalyzer
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
 warnings.filterwarnings('ignore')
 app = Flask(__name__)
+# Create necessary folders if they don't exist
 if not os.path.exists('static/images'): os.makedirs('static/images')
+if not os.path.exists('saved_models'): os.makedirs('saved_models')
 
 # --- (Settings are the same) ---
 NEWS_API_KEY = os.getenv('NEWS_API_KEY', 'YOUR_API_KEY_HERE')
@@ -34,7 +38,8 @@ PREDICTION_DAYS = 5
 DIVERGENCE_LOOKBACK = 30
 newsapi = NewsApiClient(api_key=NEWS_API_KEY)
 
-# --- (All helper functions for analysis are the same) ---
+
+# --- All Helper Functions for Analysis and Manual Indicators ---
 # ... (Copy all the calculate_..., detect_..., and get_sentiment_... functions from your previous app.py here) ...
 def calculate_rsi(data, period=14):
     delta = data['Close'].diff()
@@ -91,42 +96,81 @@ def get_sentiment_analysis(ticker):
     except:
         return "Neutral"
 
-# --- NEW: Lightweight Prediction Function ---
+
+# --- NEW: Function to handle training and saving ---
+def train_and_save_model(ticker, feature_columns):
+    print(f"[{ticker}] Training a new model...")
+    # This function contains the logic from our old train_model.py
+    data = yf.download(ticker, start='2015-01-01', end=date.today().strftime('%Y-%m-%d'), progress=False)
+    data['RSI_14'] = calculate_rsi(data)
+    data['MACD_12_26_9'], _ = calculate_macd(data)
+    data['BBU_20_2.0'], data['BBM_20_2.0'], data['BBL_20_2.0'] = calculate_bollinger_bands(data)
+    data.dropna(inplace=True)
+    
+    scaler = MinMaxScaler(feature_range=(0, 1))
+    scaled_features = scaler.fit_transform(data[feature_columns])
+    with open(f'saved_models/{ticker}_scaler.pkl', 'wb') as f:
+        pickle.dump(scaler, f)
+    
+    high_col_idx, low_col_idx, close_col_idx = [feature_columns.index(c) for c in ['High', 'Low', 'Close']]
+    X_train, y_train = [], []
+    for i in range(TIME_STEPS, len(scaled_features)):
+        X_train.append(scaled_features[i-TIME_STEPS:i, :]); y_train.append(scaled_features[i, [high_col_idx, low_col_idx, close_col_idx]])
+    X_train, y_train = np.array(X_train), np.array(y_train)
+
+    model = Sequential([
+        LSTM(units=100, return_sequences=True, input_shape=(X_train.shape[1], X_train.shape[2])), Dropout(0.2),
+        LSTM(units=100, return_sequences=False), Dropout(0.2), Dense(units=50), Dense(units=3)
+    ])
+    model.compile(optimizer='adam', loss='mean_squared_error')
+    model.fit(X_train, y_train, batch_size=32, epochs=30, verbose=0)
+    
+    model.save(f'saved_models/{ticker}_model.h5')
+    print(f"[{ticker}] New model saved.")
+    return model, scaler
+
+
+# --- The Main Processing Function with "Train on Demand" Logic ---
 def process_stock_data(ticker):
     try:
-        # 1. Check if model files exist
         model_path = f'saved_models/{ticker}_model.h5'
         scaler_path = f'saved_models/{ticker}_scaler.pkl'
-        if not os.path.exists(model_path) or not os.path.exists(scaler_path):
-            return {"error": f"No pre-trained model found for {ticker}. Please run the daily training script."}
+        feature_columns = ['Open', 'High', 'Low', 'Close', 'Volume', 'RSI_14', 'MACD_12_26_9', 'BBL_20_2.0', 'BBM_20_2.0', 'BBU_20_2.0']
         
-        # 2. LOAD the pre-trained model and scaler
-        model = load_model(model_path)
-        with open(scaler_path, 'rb') as f:
-            scaler = pickle.load(f)
+        # 1. Check if model exists and is fresh (less than 24 hours old)
+        model_is_stale = True
+        if os.path.exists(model_path):
+            model_age = time.time() - os.path.getmtime(model_path)
+            if model_age < 86400: # 86400 seconds = 24 hours
+                model_is_stale = False
 
-        # 3. Get the latest data for prediction
+        # 2. If model doesn't exist or is stale, train a new one
+        if model_is_stale:
+            model, scaler = train_and_save_model(ticker, feature_columns)
+        else:
+            # 3. If model is fresh, load it from disk
+            print(f"[{ticker}] Loading existing fresh model.")
+            model = load_model(model_path)
+            with open(scaler_path, 'rb') as f:
+                scaler = pickle.load(f)
+        
+        # --- The rest of the function is for prediction, and is mostly the same ---
         data = yf.download(ticker, start='2015-01-01', end=date.today().strftime('%Y-%m-%d'), progress=False)
         if data.empty: return {"error": f"No data found for {ticker}."}
         
-        # (Analysis is the same, but we don't dropna yet)
         pivot_levels = calculate_pivot_points(data)
         data['RSI_14'] = calculate_rsi(data)
         data['MACD_12_26_9'], _ = calculate_macd(data)
         data['BBU_20_2.0'], data['BBM_20_2.0'], data['BBL_20_2.0'] = calculate_bollinger_bands(data)
-        
         reversal_signal = detect_reversal_signal(data.dropna(), DIVERGENCE_LOOKBACK)
         last_actual_close = data['Close'].iloc[-1]
         data.reset_index(inplace=True)
 
-        # 4. Prepare the last sequence for prediction
-        feature_columns = ['Open', 'High', 'Low', 'Close', 'Volume', 'RSI_14', 'MACD_12_26_9', 'BBL_20_2.0', 'BBM_20_2.0', 'BBU_20_2.0']
         last_sequence_df = data[feature_columns].tail(TIME_STEPS)
-        # We must use the LOADED scaler to transform this new data
         scaled_features = scaler.transform(last_sequence_df)
         prediction_input = np.reshape(scaled_features, (1, TIME_STEPS, len(feature_columns)))
         
-        # 5. PREDICT (no training!)
+        # ... (Prediction loop and result formatting are identical to the last version) ...
         predicted_scaled_values = []
         high_col_idx, low_col_idx, close_col_idx = [feature_columns.index(c) for c in ['High', 'Low', 'Close']]
         for _ in range(PREDICTION_DAYS):
@@ -134,9 +178,6 @@ def process_stock_data(ticker):
             predicted_scaled_values.append(prediction_scaled)
             new_row = prediction_input[0, -1, :].copy(); new_row[high_col_idx], new_row[low_col_idx], new_row[close_col_idx] = prediction_scaled[0], prediction_scaled[1], prediction_scaled[2]
             prediction_input = np.reshape(np.vstack([prediction_input[0, 1:, :], new_row]), (1, TIME_STEPS, len(feature_columns)))
-        
-        # (The rest of the logic is identical to your last version)
-        # ... (Copy the result formatting, recommendation logic, and plotting code here) ...
         predicted_scaled_values = np.array(predicted_scaled_values)
         dummy_array = np.zeros((len(predicted_scaled_values), len(feature_columns))); dummy_array[:, [high_col_idx, low_col_idx, close_col_idx]] = predicted_scaled_values
         inversed_predictions = scaler.inverse_transform(dummy_array)
@@ -166,7 +207,6 @@ def process_stock_data(ticker):
         plt.title(title_text, fontsize=14); plt.xlabel('Date'); plt.ylabel('Price (INR)')
         plt.legend(); plt.xticks(rotation=45); plt.tight_layout(); plt.savefig(plot_path); plt.close()
         return {"ticker": ticker, "prediction_table": prediction_df.to_dict(orient='records'), "summary": {"Trend": trend, "Sentiment": sentiment_category, "Reversal Signal": reversal_signal, "Recommendation": recommendation}, "pivot_points": {k: f'{v:.2f}' for k, v in pivot_levels.items()}, "plot_url": f'/{plot_path}?t={time.time()}'}
-        
     except Exception as e:
         print(f"Error processing {ticker}: {e}", file=sys.stderr)
         return {"error": f"An unexpected error occurred. Check server logs for details."}
