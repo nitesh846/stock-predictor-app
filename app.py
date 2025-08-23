@@ -1,4 +1,4 @@
-# app.py - FINAL SCALABLE VERSION (Train on Demand)
+# app.py - FINAL CORRECTED VERSION
 
 import matplotlib
 matplotlib.use('Agg')
@@ -27,7 +27,6 @@ from nltk.sentiment.vader import SentimentIntensityAnalyzer
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
 warnings.filterwarnings('ignore')
 app = Flask(__name__)
-# Create necessary folders if they don't exist
 if not os.path.exists('static/images'): os.makedirs('static/images')
 if not os.path.exists('saved_models'): os.makedirs('saved_models')
 
@@ -39,8 +38,7 @@ DIVERGENCE_LOOKBACK = 30
 newsapi = NewsApiClient(api_key=NEWS_API_KEY)
 
 
-# --- All Helper Functions for Analysis and Manual Indicators ---
-# ... (Copy all the calculate_..., detect_..., and get_sentiment_... functions from your previous app.py here) ...
+# --- All Helper Functions (with the crucial fix) ---
 def calculate_rsi(data, period=14):
     delta = data['Close'].diff()
     gain = (delta.where(delta > 0, 0)).rolling(window=period).mean()
@@ -66,21 +64,32 @@ def calculate_pivot_points(data):
     s1 = (2 * p) - high; r1 = (2 * p) - low
     s2 = p - (high - low); r2 = p + (high - low)
     return {'P': p, 'S1': s1, 'R1': r1, 'S2': s2, 'R2': r2}
+
 def detect_reversal_signal(data, lookback_period):
+    # --- THIS FUNCTION CONTAINS THE FIX ---
     recent_data = data.tail(lookback_period).copy()
     if recent_data.empty or 'RSI_14' not in recent_data.columns: return "None"
-    if recent_data['Close'].iloc[-1] == recent_data['Close'].max():
+
+    # Bearish Divergence: Price makes a new high, RSI makes a lower high
+    # NEW, CORRECTED LINE:
+    if recent_data['Close'].idxmax() == recent_data.index[-1]:
         high_price_idx = recent_data['Close'].idxmax()
         second_high_price_series = recent_data['Close'].drop(high_price_idx).nlargest(1)
         if not second_high_price_series.empty and recent_data.loc[high_price_idx, 'RSI_14'] < recent_data.loc[second_high_price_series.index[0], 'RSI_14']:
             return "Bearish Divergence"
-    if recent_data['Close'].iloc[-1] == recent_data['Close'].min():
+
+    # Bullish Divergence: Price makes a new low, RSI makes a higher low
+    # NEW, CORRECTED LINE:
+    if recent_data['Close'].idxmin() == recent_data.index[-1]:
         low_price_idx = recent_data['Close'].idxmin()
         second_low_price_series = recent_data['Close'].drop(low_price_idx).nsmallest(1)
         if not second_low_price_series.empty and recent_data.loc[low_price_idx, 'RSI_14'] > recent_data.loc[second_low_price_series.index[0], 'RSI_14']:
             return "Bullish Divergence"
+            
     return "None"
+
 def get_sentiment_analysis(ticker):
+    # (This function is unchanged)
     if not NEWS_API_KEY or NEWS_API_KEY == 'YOUR_API_KEY_HERE': return "Neutral"
     try:
         query = ticker.replace('.NS', '')
@@ -97,10 +106,9 @@ def get_sentiment_analysis(ticker):
         return "Neutral"
 
 
-# --- NEW: Function to handle training and saving ---
 def train_and_save_model(ticker, feature_columns):
+    # (This function is unchanged)
     print(f"[{ticker}] Training a new model...")
-    # This function contains the logic from our old train_model.py
     data = yf.download(ticker, start='2015-01-01', end=date.today().strftime('%Y-%m-%d'), progress=False)
     data['RSI_14'] = calculate_rsi(data)
     data['MACD_12_26_9'], _ = calculate_macd(data)
@@ -130,31 +138,27 @@ def train_and_save_model(ticker, feature_columns):
     return model, scaler
 
 
-# --- The Main Processing Function with "Train on Demand" Logic ---
 def process_stock_data(ticker):
+    # (This function is unchanged)
     try:
         model_path = f'saved_models/{ticker}_model.h5'
         scaler_path = f'saved_models/{ticker}_scaler.pkl'
         feature_columns = ['Open', 'High', 'Low', 'Close', 'Volume', 'RSI_14', 'MACD_12_26_9', 'BBL_20_2.0', 'BBM_20_2.0', 'BBU_20_2.0']
         
-        # 1. Check if model exists and is fresh (less than 24 hours old)
         model_is_stale = True
         if os.path.exists(model_path):
             model_age = time.time() - os.path.getmtime(model_path)
-            if model_age < 86400: # 86400 seconds = 24 hours
+            if model_age < 86400:
                 model_is_stale = False
 
-        # 2. If model doesn't exist or is stale, train a new one
         if model_is_stale:
             model, scaler = train_and_save_model(ticker, feature_columns)
         else:
-            # 3. If model is fresh, load it from disk
             print(f"[{ticker}] Loading existing fresh model.")
             model = load_model(model_path)
             with open(scaler_path, 'rb') as f:
                 scaler = pickle.load(f)
         
-        # --- The rest of the function is for prediction, and is mostly the same ---
         data = yf.download(ticker, start='2015-01-01', end=date.today().strftime('%Y-%m-%d'), progress=False)
         if data.empty: return {"error": f"No data found for {ticker}."}
         
@@ -170,7 +174,6 @@ def process_stock_data(ticker):
         scaled_features = scaler.transform(last_sequence_df)
         prediction_input = np.reshape(scaled_features, (1, TIME_STEPS, len(feature_columns)))
         
-        # ... (Prediction loop and result formatting are identical to the last version) ...
         predicted_scaled_values = []
         high_col_idx, low_col_idx, close_col_idx = [feature_columns.index(c) for c in ['High', 'Low', 'Close']]
         for _ in range(PREDICTION_DAYS):
@@ -198,7 +201,7 @@ def process_stock_data(ticker):
         prediction_dates = [d.strftime('%Y-%m-%d') for d in pd.bdate_range(start=pd.to_datetime(data['Date'].iloc[-1]) + timedelta(days=1), periods=PREDICTION_DAYS)]
         prediction_df = pd.DataFrame({'Date': prediction_dates, 'High': [f'{p:.2f}' for p in predicted_highs], 'Low': [f'{p:.2f}' for p in predicted_lows], 'Close': [f'{p:.2f}' for p in predicted_closes]})
         plot_path = f'static/images/{ticker}_plot.png'
-        plt.style.use('seaborn-v0_8-darkgrid'); plt.figure(figsize=(10, 6))
+        plt.style.use('seaborn-v_8-darkgrid'); plt.figure(figsize=(10, 6))
         historical_plot_data = data.tail(HISTORICAL_DAYS_TO_PLOT)
         plt.plot(historical_plot_data['Date'], historical_plot_data['Close'], label='Historical Close', color='royalblue')
         plt.plot(pd.to_datetime(prediction_df['Date']), predicted_closes, label='Predicted Close', linestyle='--', color='orangered', marker='o')
