@@ -1,4 +1,4 @@
-# app.py - FINAL CORRECTED VERSION
+# app.py - FINAL, CORRECTED, AND ROBUST VERSION
 
 import matplotlib
 matplotlib.use('Agg')
@@ -38,7 +38,7 @@ DIVERGENCE_LOOKBACK = 30
 newsapi = NewsApiClient(api_key=NEWS_API_KEY)
 
 
-# --- All Helper Functions (with the crucial fix) ---
+# --- All Helper Functions (with the final, robust fix) ---
 def calculate_rsi(data, period=14):
     delta = data['Close'].diff()
     gain = (delta.where(delta > 0, 0)).rolling(window=period).mean()
@@ -66,26 +66,25 @@ def calculate_pivot_points(data):
     return {'P': p, 'S1': s1, 'R1': r1, 'S2': s2, 'R2': r2}
 
 def detect_reversal_signal(data, lookback_period):
-    # --- THIS FUNCTION CONTAINS THE FIX ---
-    recent_data = data.tail(lookback_period).copy()
-    if recent_data.empty or 'RSI_14' not in recent_data.columns: return "None"
+    # --- THIS IS THE NEW, ROBUST, AND CORRECT FUNCTION ---
+    recent_data = data.tail(lookback_period)
+    if len(recent_data) < lookback_period:
+        return "None"
 
-    # Bearish Divergence: Price makes a new high, RSI makes a lower high
-    # NEW, CORRECTED LINE:
-    if recent_data['Close'].idxmax() == recent_data.index[-1]:
-        high_price_idx = recent_data['Close'].idxmax()
-        second_high_price_series = recent_data['Close'].drop(high_price_idx).nlargest(1)
-        if not second_high_price_series.empty and recent_data.loc[high_price_idx, 'RSI_14'] < recent_data.loc[second_high_price_series.index[0], 'RSI_14']:
-            return "Bearish Divergence"
+    # Find the index of the max/min price and RSI
+    max_price_idx = recent_data['Close'].idxmax()
+    max_rsi_idx = recent_data['RSI_14'].idxmax()
+    min_price_idx = recent_data['Close'].idxmin()
+    min_rsi_idx = recent_data['RSI_14'].idxmin()
 
-    # Bullish Divergence: Price makes a new low, RSI makes a higher low
-    # NEW, CORRECTED LINE:
-    if recent_data['Close'].idxmin() == recent_data.index[-1]:
-        low_price_idx = recent_data['Close'].idxmin()
-        second_low_price_series = recent_data['Close'].drop(low_price_idx).nsmallest(1)
-        if not second_low_price_series.empty and recent_data.loc[low_price_idx, 'RSI_14'] > recent_data.loc[second_low_price_series.index[0], 'RSI_14']:
-            return "Bullish Divergence"
-            
+    # Bearish Divergence: Price peak is after RSI peak
+    if max_price_idx > max_rsi_idx:
+        return "Bearish Divergence"
+
+    # Bullish Divergence: Price trough is after RSI trough
+    if min_price_idx > min_rsi_idx:
+        return "Bullish Divergence"
+        
     return "None"
 
 def get_sentiment_analysis(ticker):
@@ -166,7 +165,11 @@ def process_stock_data(ticker):
         data['RSI_14'] = calculate_rsi(data)
         data['MACD_12_26_9'], _ = calculate_macd(data)
         data['BBU_20_2.0'], data['BBM_20_2.0'], data['BBL_20_2.0'] = calculate_bollinger_bands(data)
-        reversal_signal = detect_reversal_signal(data.dropna(), DIVERGENCE_LOOKBACK)
+        
+        # We need to drop NA values before sending to the reversal detector
+        reversal_data = data.dropna()
+        reversal_signal = detect_reversal_signal(reversal_data, DIVERGENCE_LOOKBACK)
+        
         last_actual_close = data['Close'].iloc[-1]
         data.reset_index(inplace=True)
 
@@ -201,7 +204,7 @@ def process_stock_data(ticker):
         prediction_dates = [d.strftime('%Y-%m-%d') for d in pd.bdate_range(start=pd.to_datetime(data['Date'].iloc[-1]) + timedelta(days=1), periods=PREDICTION_DAYS)]
         prediction_df = pd.DataFrame({'Date': prediction_dates, 'High': [f'{p:.2f}' for p in predicted_highs], 'Low': [f'{p:.2f}' for p in predicted_lows], 'Close': [f'{p:.2f}' for p in predicted_closes]})
         plot_path = f'static/images/{ticker}_plot.png'
-        plt.style.use('seaborn-v_8-darkgrid'); plt.figure(figsize=(10, 6))
+        plt.style.use('seaborn-v0_8-darkgrid'); plt.figure(figsize=(10, 6))
         historical_plot_data = data.tail(HISTORICAL_DAYS_TO_PLOT)
         plt.plot(historical_plot_data['Date'], historical_plot_data['Close'], label='Historical Close', color='royalblue')
         plt.plot(pd.to_datetime(prediction_df['Date']), predicted_closes, label='Predicted Close', linestyle='--', color='orangered', marker='o')
